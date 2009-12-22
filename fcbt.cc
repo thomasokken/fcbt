@@ -499,6 +499,11 @@ struct game {
 	}
 
 	// Couldn't find a card we could move
+	delete newGameEntry;
+	if (lastGameEntry == NULL)
+	    gameHash[ourCrc] = NULL;
+	else
+	    lastGameEntry->next = NULL;
 	return PRUNED;
     }
 };
