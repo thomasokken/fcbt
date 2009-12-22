@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#include <string.h>
 #include <sys/time.h>
 #include <ctype.h>
 
@@ -52,7 +53,7 @@ static int timestamp() {
 static void exit_with_error(const char *fmt, ...) {
     va_list args;
     va_start(args, fmt);
-    vsprintf(stderr, fmt, args);
+    vfprintf(stderr, fmt, args);
     va_end(args);
     exit(1);
 }
@@ -117,14 +118,14 @@ struct game {
     void write() {
 	for (int i = 0; i < 8; i++) {
 	    printf("c%d:", i);
-	    for (int j = 0; j < 52 && col[i][j] != -1)
+	    for (int j = 0; j < 52 && col[i][j] != -1; j++)
 		printf(" %s", num2card(col[i][j]));
 	    printf("\n");
 	}
 	for (int i = 0; i < 4; i++)
-	    printf("f%d: %s\n", fc[i] == -1 ? "" : num2card(fc[i]));
+	    printf("f%d: %s\n", i, fc[i] == -1 ? "" : num2card(fc[i]));
     }
-}
+};
 
 int main() {
     game g;
