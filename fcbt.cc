@@ -122,6 +122,7 @@ struct game {
     unsigned char lastMovedCard;
     int ts;
     struct game *previous;
+    int depth;
 
     game(FILE *is) {
 	for (int i = 0; i < 8; i++) {
@@ -168,6 +169,7 @@ struct game {
 	    }
 	}
 	previous = NULL;
+	depth = 0;
 	ts = timestamp();
     }
 
@@ -183,8 +185,6 @@ struct game {
 	    fc[i] = previous->fc[i];
 	    disc[i] = previous->disc[i];
 	}
-	this->previous = previous;
-	ts = timestamp();
 
 	// Moves are encoded as follows: source * 10 + destination
 	// source = 0..3 (free cells) 4..11 (columns)
@@ -223,6 +223,10 @@ struct game {
 		col[dst - 2][++colptr[dst - 2]] = lastMovedCard;
 	    }
 	}
+
+	this->previous = previous;
+	depth = depth = previous->depth + 1;
+	ts = timestamp();
     }
 
     void write() {
@@ -505,5 +509,6 @@ int main() {
     deadline = timestamp();
     theGame = new game(stdin);
     theGame->solve();
+
     return 0;
 }
