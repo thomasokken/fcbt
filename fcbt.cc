@@ -196,7 +196,7 @@ struct game {
 	    // Move from free cell
 	    // Note: move to another free cell won't happen
 	    lastMovedCard = fc[src];
-	    fc[src] = -1;
+	    fc[src] = EMPTY;
 	    if (dst == 1)
 		// Move to discard
 		disc[lastMovedCard / 13]++;
@@ -207,7 +207,7 @@ struct game {
 	    // Move from column
 	    src -= 4;
 	    lastMovedCard = col[src][colptr[src]];
-	    col[src][colptr[src]--] = -1;;
+	    col[src][colptr[src]--] = EMPTY;;
 	    if (dst == 0) {
 		// Move to free cell
 		for (int i = 0; i < 4; i++)
