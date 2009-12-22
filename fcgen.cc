@@ -44,8 +44,4 @@ int main() {
 	printf(" %s", num2card(cards[i]));
     }
     printf("\n");
-    for (int i = 0; i < 4; i++)
-	printf("f%d:\n", i);
-    for (int i = 0; i < 4; i++)
-	printf("d%d:\n", i);
 }
