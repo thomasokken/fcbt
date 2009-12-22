@@ -6,6 +6,18 @@
 #include <sys/time.h>
 #include <ctype.h>
 
+struct game;
+
+static int deadline;
+static game *theGame;
+static game *topGame = NULL;
+
+#define SOLVED 0
+#define PRUNED 1
+#define TIMEOUT 2
+#define EMPTY 255
+#define NO_SUCH_CARD 255
+
 static unsigned short crc16[] = {
     0x0000, 0xC0C1, 0xC181, 0x0140, 0xC301, 0x03C0, 0x0280, 0xC241,
     0xC601, 0x06C0, 0x0780, 0xC741, 0x0500, 0xC5C1, 0xC481, 0x0440,
@@ -45,7 +57,7 @@ static const char *num2card(int c) {
     if (c < 0 || c >= 52)
 	return "XX";
     static char b[3] = "qq";
-    static const char *suit = "CDHS";
+    static const char *suit = "CDSH";
     static const char *rank = "A23456789TJQK";
     b[0] = rank[c % 13];
     b[1] = suit[c / 13];
@@ -73,11 +85,11 @@ static int card2num(const char *c) {
     switch (c[1]) {
 	case 'C': suit = 0; break;
 	case 'D': suit = 1; break;
-	case 'H': suit = 2; break;
-	case 'S': suit = 3; break;
+	case 'S': suit = 2; break;
+	case 'H': suit = 3; break;
     }
     if (rank == -1 || suit == -1)
-	return 255;
+	return NO_SUCH_CARD;
     return suit * 13 + rank;
 }
 
@@ -95,26 +107,35 @@ static void exit_with_error(const char *fmt, ...) {
     exit(1);
 }
 
+struct gameEntry {
+    gameEntry *next;
+    game *gameP;
+};
+
+static gameEntry *gameHash[65536];
+
 struct game {
     unsigned char col[8][52];
+    signed char colptr[8];
     unsigned char fc[4];
     unsigned char disc[4];
-    unsigned char last;
+    unsigned char lastMovedCard;
     int ts;
     struct game *previous;
 
-    game() {
-	for (int i = 0; i < 8; i++)
+    game(FILE *is) {
+	for (int i = 0; i < 8; i++) {
 	    for (int j = 0; j < 52; j++)
-		col[i][j] = 255;
-	for (int i = 0; i < 4; i++) {
-	    fc[i] = 255;
-	    disc[i] = 255;
+		col[i][j] = EMPTY;
+	    colptr[i] = -1;
 	}
-	last = 255;
+	for (int i = 0; i < 4; i++) {
+	    fc[i] = EMPTY;
+	    disc[i] = EMPTY;
+	}
+	lastMovedCard = EMPTY;
 	char buf[1024];
-	int colindex[8] = { 0, 0, 0, 0, 0, 0, 0, 0 };
-	while (fgets(buf, 1024, stdin) != NULL) {
+	while (fgets(buf, 1024, is) != NULL) {
 	    while (strlen(buf) > 0 && isspace(buf[strlen(buf) - 1]))
 		buf[strlen(buf) - 1] = 0;
 	    if (strlen(buf) < 3 || buf[2] != ':')
@@ -126,9 +147,9 @@ struct game {
 		    exit_with_error("Bad input line: %s\n", buf);
 		for (char *card = strtok(buf + 3, " "); card != NULL; card = strtok(NULL, " ")) {
 		    int c = card2num(card);
-		    if (c == 255)
+		    if (c == NO_SUCH_CARD)
 			exit_with_error("Bad input line: %s\n", buf);
-		    col[i][colindex[i]++] = c;
+		    col[i][++colptr[i]] = c;
 		}
 	    } else if (buf[0] == 'f') {
 		// free cell
@@ -138,9 +159,9 @@ struct game {
 		char *card = strtok(buf + 3, " ");
 		if (card != NULL) {
 		    int c = card2num(card);
-		    if (c == 255)
+		    if (c == NO_SUCH_CARD)
 			exit_with_error("Bad input line: %s\n", buf);
-		    col[i][colindex[i]++] = c;
+		    col[i][++colptr[i]] = c;
 		}
 	    } else {
 		exit_with_error("Bad input line: %s\n", buf);
@@ -150,12 +171,12 @@ struct game {
 	ts = timestamp();
     }
 
-    game(game *previous) {
+    game(game *previous, int move) {
 	for (int i = 0; i < 8; i++)
 	    for (int j = 0; j < 52; j++) {
 		int c = previous->col[i][j];
 		col[i][j] = c;
-		if (c == 255)
+		if (c == EMPTY)
 		    break;
 	    }
 	for (int i = 0; i < 4; i++) {
@@ -164,21 +185,55 @@ struct game {
 	}
 	this->previous = previous;
 	ts = timestamp();
-	// This constructor does not initialize 'last'
+
+	// Moves are encoded as follows: source * 10 + destination
+	// source = 0..3 (free cells) 4..11 (columns)
+	// destination = 0 (free cell) 1 (discard) 2..9 (columns)
+	// This gives move codes 0..119.
+	int src = move / 10;
+	int dst = move % 10;
+	if (src < 4) {
+	    // Move from free cell
+	    // Note: move to another free cell won't happen
+	    lastMovedCard = fc[src];
+	    fc[src] = -1;
+	    if (dst == 1)
+		// Move to discard
+		disc[lastMovedCard / 13]++;
+	    else
+		// Move to column
+		col[dst - 2][++colptr[dst - 2]] = lastMovedCard;
+	} else {
+	    // Move from column
+	    src -= 4;
+	    lastMovedCard = col[src][colptr[src]];
+	    col[src][colptr[src]--] = -1;;
+	    if (dst == 0) {
+		// Move to free cell
+		for (int i = 0; i < 4; i++)
+		    if (fc[i] == EMPTY) {
+			fc[i] = lastMovedCard;
+			break;
+		    }
+	    } else if (dst == 1) {
+		// Move to discard
+		disc[lastMovedCard / 13]++;
+	    } else {
+		// Move to another column
+		col[dst - 2][++colptr[dst - 2]] = lastMovedCard;
+	    }
+	}
     }
 
     void write() {
 	for (int i = 0; i < 8; i++) {
 	    printf("c%d:", i);
-	    for (int j = 0; j < 52 && col[i][j] != 255; j++)
+	    for (int j = 0; j < 52 && col[i][j] != EMPTY; j++)
 		printf(" %s", num2card(col[i][j]));
 	    printf("\n");
 	}
 	for (int i = 0; i < 4; i++)
-	    printf("f%d: %s\n", i, fc[i] == 255 ? "" : num2card(fc[i]));
-    }
-
-    void solve(int deadline) {
+	    printf("f%d: %s\n", i, fc[i] == EMPTY ? "" : num2card(fc[i]));
     }
 
     unsigned short crc() {
@@ -212,7 +267,7 @@ struct game {
 	    for (int j = 0; j < 52; j++) {
 		unsigned char c = col[sorted_index[i]][j];
 		result = result >> 8 ^ crc16[result & 0xFF ^ c & 0xFF];
-		if (c == 255)
+		if (c == EMPTY)
 		    break;
 	    }
 
@@ -267,16 +322,188 @@ struct game {
 		unsigned char thatc = that->col[that_sorted_index[i]][j];
 		if (thisc != thatc)
 		    return false;
-		if (thisc == 255 && thatc == 255)
+		if (thisc == EMPTY)
 		    continue;
 	    }
 	return true;
     }
+
+    int solve() {
+	// First, check if we're done
+	bool done = true;
+	for (int i = 0; i < 4; i++)
+	    if (disc[i] != 12) {
+		done = false;
+		break;
+	    }
+	if (done) {
+	    topGame = this;
+	    return SOLVED;
+	}
+
+	// Next, check if it's too late
+	int now = timestamp();
+	if (now > deadline) {
+	    topGame = this;
+	    return TIMEOUT;
+	}
+
+	// Next, check whether or not we're original
+	unsigned short ourCrc = crc();
+	gameEntry *ge = gameHash[ourCrc];
+	gameEntry *lastGameEntry = NULL;
+	while (ge != NULL) {
+	    if (ge->gameP->equals(this))
+		// We're not original; abandon this branch
+		return PRUNED;
+	    lastGameEntry = ge;
+	    ge = ge->next;
+	}
+	// We *are* original; add self to hashtable
+	gameEntry *newGameEntry = new gameEntry;
+	newGameEntry->next = NULL;
+	newGameEntry->gameP = this;
+	if (lastGameEntry == NULL)
+	    gameHash[ourCrc] = newGameEntry;
+	else
+	    lastGameEntry->next = newGameEntry;
+
+	// First, try moving card from free cell
+	for (int i = 0; i < 4; i++) {
+	    unsigned char c = fc[i];
+	    if (c == EMPTY)
+		// No card in this free cell
+		continue;
+	    if (c == lastMovedCard)
+		// We moved this card just before
+		continue;
+	    // Try moving this card to discard
+	    int suit = c / 13;
+	    int rank = c % 13;
+	    if (((disc[suit] + 1) & 255) == rank) {
+		game *g = new game(this, i * 10 + 1);
+		int res = g->solve();
+		if (res != PRUNED)
+		    return res;
+		else
+		    delete g;
+	    }
+	    // Try moving this card to a column
+	    bool triedMovingToEmptyColumn = false;
+	    for (int j = 0; j < 8; j++) {
+		int ptr = colptr[j];
+		if (ptr == -1) {
+		    // Destination is empty column
+		    if (triedMovingToEmptyColumn)
+			continue;
+		    else {
+			game *g = new game(this, i * 10 + j + 2);
+			int res = g->solve();
+			if (res != PRUNED)
+			    return res;
+			else {
+			    delete g;
+			    triedMovingToEmptyColumn = true;
+			}
+		    }
+		} else {
+		    // Destination is non-empty column
+		    unsigned char topCard = col[j][colptr[j]];
+		    int destSuit = topCard / 13;
+		    int destRank = topCard % 13;
+		    if (((suit ^ destSuit) & 1) == 0)
+			continue;
+		    if (rank != destRank + 1)
+			continue;
+		    game *g = new game(this, i * 10 + j + 2);
+		    int res = g->solve();
+		    if (res != PRUNED)
+			return res;
+		    else
+			delete g;
+		}
+	    }
+	}
+
+	// Next, try moving card from a column
+	for (int i = 0; i < 8; i++) {
+	    signed char ptr = colptr[i];
+	    if (ptr == -1)
+		continue;
+	    unsigned char c = col[i][ptr];
+	    if (c == lastMovedCard)
+		continue;
+	    // Try moving this card to discard
+	    int suit = c / 13;
+	    int rank = c % 13;
+	    if (((disc[suit] + 1) & 255) == rank) {
+		game *g = new game(this, i * 10 + 41);
+		int res = g->solve();
+		if (res != PRUNED)
+		    return res;
+		else
+		    delete g;
+	    }
+	    // Try moving this card to a free cell
+	    for (int j = 0; j < 4; j++)
+		if (fc[j] == EMPTY) {
+		    game *g = new game(this, i* 10 + 40);
+		    int res = g->solve();
+		    if (res != PRUNED)
+			return res;
+		    else
+			delete g;
+		    break;
+		}
+	    // Try moving this card to a column
+	    bool triedMovingToEmptyColumn = false;
+	    for (int j = 0; j < 8; j++) {
+		if (i == j)
+		    continue;
+		int ptr = colptr[j];
+		if (ptr == -1) {
+		    // Destination is empty column
+		    if (triedMovingToEmptyColumn)
+			continue;
+		    else {
+			game *g = new game(this, (i + 4) * 10 + j + 2);
+			int res = g->solve();
+			if (res != PRUNED)
+			    return res;
+			else {
+			    delete g;
+			    triedMovingToEmptyColumn = true;
+			}
+		    }
+		} else {
+		    // Destination is non-empty column
+		    unsigned char topCard = col[j][colptr[j]];
+		    int destSuit = topCard / 13;
+		    int destRank = topCard % 13;
+		    if (((suit ^ destSuit) & 1) == 0)
+			continue;
+		    if (rank != destRank + 1)
+			continue;
+		    game *g = new game(this, (i + 4) * 10 + j + 2);
+		    int res = g->solve();
+		    if (res != PRUNED)
+			return res;
+		    else
+			delete g;
+		}
+	    }
+	}
+
+	// Couldn't find a card we could move
+	return PRUNED;
+    }
 };
 
-static game theGame;
-
 int main() {
-    theGame.write();
+    for (int i = 0; i < 65536; i++)
+	gameHash[i] = NULL;
+    deadline = timestamp();
+    theGame = new game(stdin);
+    theGame->solve();
     return 0;
 }
