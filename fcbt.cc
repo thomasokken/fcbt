@@ -355,22 +355,17 @@ struct game {
 	// Next, check whether or not we're original
 	unsigned short ourCrc = crc();
 	gameEntry *ge = gameHash[ourCrc];
-	gameEntry *lastGameEntry = NULL;
 	while (ge != NULL) {
 	    if (ge->gameP->equals(this))
 		// We're not original; abandon this branch
 		return PRUNED;
-	    lastGameEntry = ge;
 	    ge = ge->next;
 	}
 	// We *are* original; add self to hashtable
 	gameEntry *newGameEntry = new gameEntry;
-	newGameEntry->next = NULL;
+	newGameEntry->next = gameHash[ourCrc];
 	newGameEntry->gameP = this;
-	if (lastGameEntry == NULL)
-	    gameHash[ourCrc] = newGameEntry;
-	else
-	    lastGameEntry->next = newGameEntry;
+	gameHash[ourCrc] = newGameEntry;
 
 	// First, try moving card from free cell
 	for (int i = 0; i < 4; i++) {
@@ -499,11 +494,8 @@ struct game {
 	}
 
 	// Couldn't find a card we could move
+	gameHash[ourCrc] = newGameEntry->next;
 	delete newGameEntry;
-	if (lastGameEntry == NULL)
-	    gameHash[ourCrc] = NULL;
-	else
-	    lastGameEntry->next = NULL;
 	return PRUNED;
     }
 };
